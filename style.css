@@ -1,0 +1,343 @@
+:root {
+    --bg: #f4f6f7;
+    --ink: #101418;
+    --muted: #5b6570;
+    --line: #d7dde3;
+    --blue: #006ee6;
+    --shadow: 0 8px 28px rgba(16, 20, 24, .12);
+}
+
+* {
+    box-sizing: border-box
+}
+
+html,
+body {
+    height: 100%
+}
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", "Noto Sans JP", sans-serif;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+button,
+input {
+    font: inherit
+}
+
+button {
+    border: 1px solid var(--line);
+    background: #fff;
+    color: var(--ink);
+    border-radius: 10px;
+    padding: 7px 11px;
+    cursor: pointer
+}
+
+button:hover {
+    background: #f2f5f7
+}
+
+button:focus-visible,
+input:focus-visible,
+summary:focus-visible {
+    outline: 3px solid rgba(0, 110, 230, .35);
+    outline-offset: 2px
+}
+
+svg:focus-visible {
+    outline: 3px solid rgba(0, 110, 230, .35);
+    outline-offset: -3px
+}
+
+.topbar {
+    min-height: 52px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(255, 255, 255, .94);
+    box-shadow: 0 1px 0 rgba(0, 0, 0, .04);
+    position: relative;
+    z-index: 10;
+}
+
+.brand {
+    font-weight: 800;
+    white-space: nowrap
+}
+
+.status {
+    color: var(--muted);
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 10em;
+    flex: 1
+}
+
+.toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+    font-size: 14px;
+    color: var(--ink)
+}
+
+.toggle input {
+    accent-color: var(--blue)
+}
+
+.readout {
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    white-space: nowrap;
+    font-size: 14px
+}
+
+.stage {
+    flex: 1;
+    min-height: 0;
+    padding: 10px;
+}
+
+.fieldBox {
+    position: relative;
+    height: 100%;
+    width: 100%;
+    max-width: calc((100vh - 72px) * 2.06649);
+    margin: 0 auto;
+    aspect-ratio: 2362/1143;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+}
+
+.svgLayer {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    touch-action: none;
+    user-select: none;
+    cursor: crosshair
+}
+
+#robot {
+    cursor: grab
+}
+
+#robot.dragging {
+    cursor: grabbing
+}
+
+.rotateHandle {
+    cursor: alias
+}
+
+.courseLine {
+    pointer-events: none
+}
+
+.traceLabel {
+    font-size: 54px;
+    font-weight: 900;
+    fill: #fff;
+    paint-order: stroke;
+    stroke: rgba(0, 0, 0, .86);
+    stroke-width: 12px;
+    stroke-linejoin: round;
+}
+
+.wallDonLabel {
+    font-size: 38px;
+    font-weight: 900;
+    fill: #e23a48;
+    paint-order: stroke;
+    stroke: #fff;
+    stroke-width: 9px;
+    stroke-linejoin: round;
+}
+
+.traceAngleLabel {
+    font-size: 46px;
+    font-weight: 900;
+    fill: #ffe8eb;
+    paint-order: stroke;
+    stroke: rgba(0, 0, 0, .88);
+    stroke-width: 11px;
+    stroke-linejoin: round;
+}
+
+.bigLabel {
+    font-size: 46px;
+    font-weight: 900;
+    fill: #fff;
+    paint-order: stroke;
+    stroke: rgba(0, 0, 0, .86);
+    stroke-width: 10px;
+    stroke-linejoin: round;
+}
+
+.smallLabel {
+    font-size: 30px;
+    font-weight: 900;
+    fill: #fff;
+    paint-order: stroke;
+    stroke: rgba(0, 0, 0, .78);
+    stroke-width: 7px;
+}
+
+.filePanel {
+    position: absolute;
+    left: 12px;
+    top: 64px;
+    z-index: 20;
+    max-width: min(520px, calc(100vw - 24px));
+    max-height: calc(100vh - 150px);
+    /* 開いたヘルプが下の履歴パネルを覆い尽くさないための上限 */
+    overflow: auto;
+    background: rgba(255, 255, 255, .96);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    padding: 8px 10px;
+    font-size: 13px;
+}
+
+.filePanel[open] {
+    padding-bottom: 10px
+}
+
+.filePanel summary {
+    cursor: pointer;
+    font-weight: 700;
+    color: var(--ink)
+}
+
+.filePanel p {
+    margin: 7px 0;
+    color: var(--muted);
+    line-height: 1.55
+}
+
+.filePanel .row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 7px
+}
+
+.filePanel label {
+    display: grid;
+    gap: 3px;
+    color: var(--muted)
+}
+
+.filePanel input[type=file] {
+    max-width: 230px
+}
+
+/* 走行履歴パネル(filePanel の下・左下に置く) */
+.filePanel.histPanel {
+    top: auto;
+    bottom: 12px;
+    max-height: 52vh;
+    display: flex;
+    flex-direction: column
+}
+
+.histList {
+    margin-top: 6px;
+    overflow: auto;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.55;
+    font-size: 12px;
+    color: var(--ink);
+    max-height: 40vh
+}
+
+.histList .hHead {
+    color: var(--muted)
+}
+
+.histList .hRow.now {
+    font-weight: 700
+}
+
+.hidden {
+    display: none !important
+}
+
+@media(max-width:760px) {
+    body {
+        overflow: auto
+    }
+
+    .topbar {
+        height: auto;
+        min-height: 52px;
+        flex-wrap: wrap
+    }
+
+    .stage {
+        height: auto;
+        min-height: 55vh;
+        padding: 6px
+    }
+
+    .fieldBox {
+        height: auto;
+        width: 100%;
+        max-width: none
+    }
+
+    .readout {
+        width: 100%;
+        white-space: normal;
+        line-height: 1.7
+    }
+
+    .filePanel {
+        position: static;
+        margin: 8px 10px 0
+    }
+}
+
+@media print {
+    body {
+        background: #fff;
+        overflow: visible
+    }
+
+    .topbar,
+    .filePanel {
+        display: none !important
+    }
+
+    .stage {
+        height: auto;
+        padding: 0
+    }
+
+    .fieldBox {
+        box-shadow: none;
+        border: 0;
+        border-radius: 0;
+        width: 100%;
+        max-width: none
+    }
+}
