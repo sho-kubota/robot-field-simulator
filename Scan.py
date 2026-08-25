@@ -1,13 +1,13 @@
 import sys
 import cv2
-import fitz  # PyMuPDF
+import pymupdf  # PyMuPDF
 import numpy as np
 import csv  # CSV出力用に標準ライブラリをインポート
 
 
 def analyze_robot_field(pdf_path):
     # 1. PDFを読み込んで画像化
-    doc = fitz.open(pdf_path)
+    doc = pymupdf.open(pdf_path)
     try:
         return _analyze_pdf(doc)
     finally:
@@ -30,7 +30,7 @@ def _analyze_pdf(doc):
     px_per_mm = 5.0
     dpi = px_per_mm * 25.4
     zoom = dpi / 72.0
-    matrix = fitz.Matrix(zoom, zoom)
+    matrix = pymupdf.Matrix(zoom, zoom)
     # alpha=False でアルファチャンネルを省略し、純粋なRGB画像として取得
     pix = page.get_pixmap(matrix=matrix, alpha=False)
 
@@ -285,6 +285,17 @@ def _analyze_pdf(doc):
     process_lines(horizontal_lines, True)
     process_lines(vertical_lines, False)
 
+    # 6. スタートエリアの検出（カラー画像から青色を抽出）
+    start_areas = detect_start_area(
+        field_img, offset_x, offset_y, px_per_mm
+    )
+
+    for i, area in enumerate(start_areas):
+        print(
+            f"スタートエリア {i+1}: 座標({area['x']:.1f}mm, {area['y']:.1f}mm), "
+            f"サイズ({area['w']:.1f}mm × {area['h']:.1f}mm)"
+        )
+
     # debug.jpg を作成
     debug_img_bgr = cv2.cvtColor(field_img, cv2.COLOR_RGB2BGR)
     if not cv2.imwrite("debug.jpg", debug_img_bgr, [cv2.IMWRITE_JPEG_QUALITY, 90]):
@@ -293,6 +304,80 @@ def _analyze_pdf(doc):
         print("debug.jpg を作成しました。")
 
     return detected_lines
+
+
+def detect_start_area(field_img, offset_x, offset_y, px_per_mm):
+    """
+    内部輪郭のみを抽出し、25cm×25cmのスタートエリアを検出する関数
+    """
+    # 1. RGBからHSV色空間へ変換
+    hsv = cv2.cvtColor(field_img, cv2.COLOR_RGB2HSV)
+
+    # 2. 青色の範囲を指定 (112, 191, 143)
+    lower_blue = np.array([102, 120, 80])
+    upper_blue = np.array([122, 255, 255])
+    mask = cv2.inRange(hsv, lower_blue, upper_blue)
+
+    # 3. 枠線の細い途切れを補正
+    kernel = np.ones((5, 5), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+    # 4. 階層構造を取得するために RETR_TREE を指定
+    contours, hierarchy = cv2.findContours(
+        mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    start_areas = []
+
+    # 輪郭が存在しない場合
+    if hierarchy is None:
+        return start_areas
+
+    # 250mm × 250mm（誤差 ±50mm）の範囲設定
+    target_w_mm = 250.0
+    target_h_mm = 250.0
+    tolerance_mm = 50.0
+
+    min_w_px = (target_w_mm - tolerance_mm) * px_per_mm
+    max_w_px = (target_w_mm + tolerance_mm) * px_per_mm
+    min_h_px = (target_h_mm - tolerance_mm) * px_per_mm
+    max_h_px = (target_h_mm + tolerance_mm) * px_per_mm
+
+    # 階層情報の配列を取得 [Next, Previous, First_Child, Parent]
+    hierarchy_data = hierarchy[0]
+
+    for i, cnt in enumerate(contours):
+        # 親 (Parent) が存在しない輪郭 (==-1) は最外郭なのでスキップし、内部輪郭のみ抽出
+        if hierarchy_data[i][3] == -1:
+            continue
+
+        # 輪郭の近似
+        epsilon = 0.03 * cv2.arcLength(cnt, True)
+        approx = cv2.approxPolyDP(cnt, epsilon, True)
+
+        x, y, w, h = cv2.boundingRect(cnt)
+
+        # 頂点数および外形サイズのチェック
+        if 4 <= len(approx) <= 6:
+            if min_w_px <= w <= max_w_px and min_h_px <= h <= max_h_px:
+                mm_x = (x + offset_x) / px_per_mm
+                mm_y = (y + offset_y) / px_per_mm
+                mm_w = w / px_per_mm
+                mm_h = h / px_per_mm
+
+                start_areas.append(
+                    {
+                        "x": mm_x,
+                        "y": mm_y,
+                        "w": mm_w,
+                        "h": mm_h,
+                    }
+                )
+
+                # デバッグ画像に赤色の太枠を描画 (BGR: 0, 0, 255)
+                cv2.rectangle(field_img, (x, y), (x + w, y + h), (0, 0, 255), 4)
+
+    return start_areas
 
 
 def save_to_csv(lines, csv_path):
