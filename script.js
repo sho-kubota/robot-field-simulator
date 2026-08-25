@@ -1,19 +1,16 @@
 (() => {
   "use strict";
   const FIELD_W = 2362, FIELD_H = 1143;
-  // ロボット実寸: 横231mm × 縦243mm(タイヤ間191mm・後端から車軸100mm・前区間67.1mm)
-  // ロボット実寸: 横231mm × 縦243mm(タイヤ間191mm・後端から車軸100mm)。
-  // 前方67.1mmの色分け帯はSVG上 75.9=FRONT_LEN(143)-67.1 幅63.1(内枠4mmマージン)としてハードコード。
   const ROBOT_W = 231, ROBOT_L = 243, HALF_W = ROBOT_W / 2;
   const TREAD = 191, AXLE_FROM_REAR = 100;
-  const FRONT_LEN = ROBOT_L - AXLE_FROM_REAR; // 車軸から前端まで=143mm(原点は車軸)
+  const FRONT_LEN = ROBOT_L - AXLE_FROM_REAR;
   const ANGLE_SNAP_DEG = 8;
   const NODE_MERGE_MM = 2;
-  const WALL_ALIGN_DEG = 15;    // 壁ドンで直角へ矯正できる角度範囲(前後移動の自動補正)
-  const WALL_BTN_ALIGN_DEG = 45; // W/S・ボタンの壁ドンは意図的な操作なので広めに補正
+  const WALL_ALIGN_DEG = 15;
+  const WALL_BTN_ALIGN_DEG = 45;
   const DEFAULT_POSE = { x: 186.4, y: 956.7, theta: 0 };
-  const WALL_EPS_MM = .5;    // 壁に接触しているとみなす距離
-  const LS_KEY = "wroSimState.v1"; // 自動保存用のlocalStorageキー
+  const WALL_EPS_MM = .5;
+  const LS_KEY = "wroSimState.v1";
 
   const $ = (id) => document.getElementById(id);
   const svg = $("fieldSvg");
@@ -40,19 +37,80 @@
   const bgToggleEl = $("bgToggle");
   const bgToggleWrap = $("bgToggleWrap");
 
+  // 初期位置設定用要素
+  const initXInput = $("initX");
+  const initYInput = $("initY");
+  const initAngleInput = $("initAngle");
+  const setInitBtn = $("setInitBtn");
+  const resetInitBtn = $("resetInitBtn");
+
   let lines = [];
   let nodes = [];
-  let pose = { ...DEFAULT_POSE };
+  let initPos = { ...DEFAULT_POSE }; // 設定可能な初期位置
+  let pose = { ...initPos };
   let beforePose = { ...pose };
   let history = [{ ...pose, moveCm: 0, signedCm: 0, rot: 0 }];
   let pointer = null;
   let undoStack = [], redoStack = [];
-  let csvText = ""; // 読み込んだ lines.csv の中身(自動保存・再利用用)
-  let saveFailedNoted = false; // 自動保存失敗を一度だけ通知するためのフラグ
-  let prevRun = null;          // 前回走行の軌跡(軌跡クリア時に退避し薄い破線で比較表示)
-  let runStart = null;         // 経過時間計測の起点(最初の操作で開始、クリアでリセット)
+  let csvText = "";
+  let saveFailedNoted = false;
+  let prevRun = null;
+  let runStart = null;
 
-  // ---- 表示ビュー管理(ホイール拡縮 / Shift+ドラッグ・中ボタンで平行移動) ----
+  // ---- 初期位置の管理機能 ----
+  function loadInitPos() {
+    const saved = localStorage.getItem("wro_sim_init_pos");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        initPos = {
+          x: Number.isFinite(parsed.x) ? parsed.x : DEFAULT_POSE.x,
+          y: Number.isFinite(parsed.y) ? parsed.y : DEFAULT_POSE.y,
+          theta: Number.isFinite(parsed.theta) ? parsed.theta : (Number.isFinite(parsed.angle) ? parsed.angle : DEFAULT_POSE.theta)
+        };
+      } catch (e) {
+        console.error("初期位置の読み込みエラー", e);
+      }
+    }
+    if (initXInput) initXInput.value = initPos.x;
+    if (initYInput) initYInput.value = initPos.y;
+    if (initAngleInput) initAngleInput.value = initPos.theta;
+  }
+
+  function saveInitPos() {
+    localStorage.setItem("wro_sim_init_pos", JSON.stringify(initPos));
+  }
+
+  [initXInput, initYInput, initAngleInput].forEach((inputEl) => {
+    if (!inputEl) return;
+    inputEl.addEventListener("change", () => {
+      initPos.x = parseFloat(initXInput.value) || 0;
+      initPos.y = parseFloat(initYInput.value) || 0;
+      initPos.theta = parseFloat(initAngleInput.value) || 0;
+      saveInitPos();
+    });
+  });
+
+  if (setInitBtn) {
+    setInitBtn.addEventListener("click", () => {
+      initPos.x = Number(pose.x.toFixed(1));
+      initPos.y = Number(pose.y.toFixed(1));
+      initPos.theta = Number(pose.theta.toFixed(0));
+
+      if (initXInput) initXInput.value = initPos.x;
+      if (initYInput) initYInput.value = initPos.y;
+      if (initAngleInput) initAngleInput.value = initPos.theta;
+
+      saveInitPos();
+      if (statusEl) statusEl.textContent = `初期位置を (${initPos.x}, ${initPos.y}, ${initPos.theta}°) に登録しました`;
+    });
+  }
+
+  if (resetInitBtn) {
+    resetInitBtn.addEventListener("click", () => resetHome());
+  }
+
+  // ---- 表示ビュー管理 ----
   let view = { x: 0, y: 0, w: FIELD_W, h: FIELD_H };
   function applyView() {
     svg.setAttribute("viewBox", `${fmt(view.x)} ${fmt(view.y)} ${fmt(view.w)} ${fmt(view.h)}`);
@@ -81,7 +139,7 @@
   function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
   function fmt(v, d = 1) { return Number(v).toFixed(d); }
   function signedCmText(v) { return `${v > 0 ? "+" : ""}${fmt(v)}cm`; }
-  // 最も近い壁までの距離 [名前, mm](ロボットの当たり判定込み)
+
   function nearestWallDist(p) {
     return [
       ["左", p.x - extentXB(p.theta)],
@@ -91,8 +149,6 @@
     ].reduce((a, b) => b[1] < a[1] ? b : a);
   }
 
-  // 車軸原点のロボット四隅(θ回転後の相対座標)。pose(x,y)=後輪車軸の中点。
-  // 前端は AXLE_FROM_REAR より先まであるため前後で当たり幅が違う(前=FRONT_LEN/後=AXLE_FROM_REAR)。
   function robotCorners(theta) {
     const r = rad(theta), c = Math.cos(r), s = Math.sin(r);
     return [
@@ -100,34 +156,33 @@
       [-AXLE_FROM_REAR, HALF_W], [FRONT_LEN, HALF_W],
     ].map(([x, y]) => ({ x: x * c - y * s, y: x * s + y * c }));
   }
-  // θ回転時の各方向への出っ張り(四隅投影)。前後は非対称、左右は対称。
-  function extentXF(theta) { let m = 0; for (const p of robotCorners(theta)) m = Math.max(m, p.x); return m; }  // 前方
-  function extentXB(theta) { let m = 0; for (const p of robotCorners(theta)) m = Math.max(m, -p.x); return m; } // 後方
-  function extentYU(theta) { let m = 0; for (const p of robotCorners(theta)) m = Math.max(m, -p.y); return m; } // 上方向(-y側: 後端寄りの角が来る)
-  function extentYD(theta) { let m = 0; for (const p of robotCorners(theta)) m = Math.max(m, p.y); return m; }  // 下方向(+y側: 前端寄りの角が来る)
-  // 回転角を考慮してロボット全体をフィールド内(4つの壁の内側)に収める
+
+  function extentXF(theta) { let m = 0; for (const p of robotCorners(theta)) m = Math.max(m, p.x); return m; }
+  function extentXB(theta) { let m = 0; for (const p of robotCorners(theta)) m = Math.max(m, -p.x); return m; }
+  function extentYU(theta) { let m = 0; for (const p of robotCorners(theta)) m = Math.max(m, -p.y); return m; }
+  function extentYD(theta) { let m = 0; for (const p of robotCorners(theta)) m = Math.max(m, p.y); return m; }
+
   function clampToWalls(p) {
     const xf = extentXF(p.theta), xb = extentXB(p.theta), yu = extentYU(p.theta), yd = extentYD(p.theta);
     return { ...p, x: clamp(p.x, xb, FIELD_W - xf), y: clamp(p.y, yu, FIELD_H - yd) };
   }
-  // ---- 旋回モード: 超信地旋回(その場回転) / 信地旋回(片輪固定で弧を描く) ----
-  // 信地旋回では pivotToggleEl が ON のとき、回転方向側のタイヤを固定点として
-  // 車体全体がその周りを弧を描いて動く(実機の片輪ピボット回転の再現)。
-  // delta>0(時計回り)なら右タイヤ固定 / delta<0(反時計回り)なら左タイヤ固定。
+
+  const WHEEL_LOCAL_X = 0;
+  const WHEEL_LOCAL_Y = TREAD / 2;
+
   function rotatedPose(anchor, delta) {
     const th = norm(anchor.theta + delta);
     if (!pivotToggleEl.checked || Math.abs(delta) < 1e-9) return { x: anchor.x, y: anchor.y, theta: th };
     const r = rad(anchor.theta), c = Math.cos(r), s = Math.sin(r);
-    // 固定するのは内側の後輪: 車体座標 x=0(原点=車軸中点)、y=トレッド半分
     const px = WHEEL_LOCAL_X;
     const py = (delta > 0 ? WHEEL_LOCAL_Y : -WHEEL_LOCAL_Y);
-    const pxw = anchor.x + (px * c - py * s); // ピボット(固定タイヤ)のワールド座標
+    const pxw = anchor.x + (px * c - py * s);
     const pyw = anchor.y + (px * s + py * c);
     const dr = rad(delta), dc = Math.cos(dr), ds = Math.sin(dr);
     const vx = anchor.x - pxw, vy = anchor.y - pyw;
     return { x: pxw + vx * dc - vy * ds, y: pyw + vx * ds + vy * dc, theta: th };
   }
-  // 現在接触している壁の一覧
+
   function wallContacts(p) {
     const xf = extentXF(p.theta), xb = extentXB(p.theta), yn = extentYU(p.theta), yp = extentYD(p.theta), c = [];
     if (p.x <= xb + WALL_EPS_MM) c.push("左壁");
@@ -136,19 +191,13 @@
     if (p.y >= FIELD_H - yp - WALL_EPS_MM) c.push("下壁");
     return c;
   }
-  // ---- 信地旋回: 内側の後輪を軸として回転する(超信地との切り替えは topbar の「信地旋回」) ----
-  // 後輪のローカル座標。pose 原点=車軸なのでタイヤは x=0、トレッド半分だけ左右
-  const WHEEL_LOCAL_X = 0;
-  const WHEEL_LOCAL_Y = TREAD / 2;               // = 95.5mm
-  // 壁ドン処理: 前後移動で「新たに」壁へ押しつけたとき、向きがほぼ正面(±alignDeg°)なら
-  // 0/90/180/270° へ補正し、壁に完全密着させる。実物の「壁へ当てて姿勢を整える」動作の再現。
-  // すでに触れていた壁は補正対象にしない(壁ずらし運転を邪魔しないため)。
+
   function applyWallDon(oldPose, cand, alignDeg = WALL_ALIGN_DEG) {
-    cand = { ...cand, theta: norm(cand.theta) }; // 非正規角(復元データ等)でも確実に動くように
+    cand = { ...cand, theta: norm(cand.theta) };
     const oldWalls = wallContacts(oldPose);
     const walls = wallContacts(cand);
     const fresh = walls.filter(w => !oldWalls.includes(w));
-    if (!fresh.length) return cand; // 新規接触なし → 何もしない
+    if (!fresh.length) return cand;
     const vert = fresh.includes("左壁") || fresh.includes("右壁");
     const horiz = fresh.includes("上壁") || fresh.includes("下壁");
     const cands = [...(vert ? [0, 180] : []), ...(horiz ? [90, 270] : [])];
@@ -157,10 +206,9 @@
       const d = Math.abs(deltaAngle(cand.theta, c));
       if (d <= alignDeg && (!best || d < best.d)) best = { c, d };
     }
-    if (!best) return { ...cand, wallDon: { walls: fresh, corrected: null } }; // 角度が範囲外(補正せず記録だけ)
-    const corrected = deltaAngle(cand.theta, best.c); // ほぼ0°なら「直角どおり」として扱う
+    if (!best) return { ...cand, wallDon: { walls: fresh, corrected: null } };
+    const corrected = deltaAngle(cand.theta, best.c);
     let q = { ...cand, theta: norm(best.c) };
-    // 矯正後に触れているすべての壁へ完全密着させる(上下も方向別: 回転すると前143/後100の長辺が上下軸に来る)
     const xf = extentXF(q.theta), xb = extentXB(q.theta), yp = extentYD(q.theta), yn = extentYU(q.theta);
     if (walls.includes("左壁")) q.x = xb;
     if (walls.includes("右壁")) q.x = FIELD_W - xf;
@@ -168,26 +216,23 @@
     if (walls.includes("下壁")) q.y = FIELD_H - yp;
     return { ...q, wallDon: { walls: fresh, corrected } };
   }
-  // 現在の姿勢でまっすぐ進める最大距離(前進:hi / 後退:lo、mm)
+
   function maxDriveT(p) {
     const u = unit(p.theta), xf = extentXF(p.theta), xb = extentXB(p.theta), yu = extentYU(p.theta), yd = extentYD(p.theta);
-    let lo = -Infinity, hi = Infinity, loWall = "?", hiWall = "?"; // どちらの壁で頭打ちになるかも返す
+    let lo = -Infinity, hi = Infinity, loWall = "?", hiWall = "?";
     if (Math.abs(u.x) > 1e-9) {
       const a = (xb - p.x) / u.x, b = (FIELD_W - xf - p.x) / u.x;
       if (Math.max(a, b) < hi) { hi = Math.max(a, b); hiWall = u.x > 0 ? "右壁" : "左壁"; }
       if (Math.min(a, b) > lo) { lo = Math.min(a, b); loWall = u.x > 0 ? "左壁" : "右壁"; }
     }
     if (Math.abs(u.y) > 1e-9) {
-      // 上方向は後端/前端の短い側(extentYU)、下方向は extentYD を使う(対称だと最大43mm手前で止まる)
       const a = (yu - p.y) / u.y, b = (FIELD_H - yd - p.y) / u.y;
       if (Math.max(a, b) < hi) { hi = Math.max(a, b); hiWall = u.y > 0 ? "下壁" : "上壁"; }
       if (Math.min(a, b) > lo) { lo = Math.min(a, b); loWall = u.y > 0 ? "上壁" : "下壁"; }
     }
     return { lo, hi, loWall, hiWall };
   }
-  // 壁ドン実行(W・Sキー/ボタン): 指定方向へまっすぐ突き当たり、±WALL_BTN_ALIGN_DEG°以内なら直角へ補正する
-  // 既に壁へ触れている状態でも、角度が範囲内ならその場で直角化+密着させる
-  // (斜めのまま角から当たって「角度大」で止まった後、S/W を押し直しても隙間が残る問題の修正)
+
   function squareUpInPlace() {
     const walls = wallContacts(pose);
     if (!walls.length) return false;
@@ -199,10 +244,9 @@
       const d = Math.abs(deltaAngle(pose.theta, c));
       if (d <= WALL_BTN_ALIGN_DEG && (!best || d < best.d)) best = { c, d };
     }
-    if (!best) return false; // 角度大: 補正できる直角が無い
+    if (!best) return false;
     const th = norm(best.c);
     let np = { ...pose, theta: th };
-    // 触れているすべての壁へ完全密着させる(上下は方向別の当たり幅を使用)
     const xf = extentXF(th), xb = extentXB(th), yu = extentYU(th), yd = extentYD(th);
     if (walls.includes("左壁")) np.x = xb;
     if (walls.includes("右壁")) np.x = FIELD_W - xf;
@@ -211,16 +255,14 @@
     commit(np, "壁ドン(その場で直角補正)", { moveLocked: false, snap: false });
     return true;
   }
-  function driveToWall(sign) { // sign:+1=前進して壁ドン / -1=後退して壁ドン
+
+  function driveToWall(sign) {
     const u = unit(pose.theta);
     const t = maxDriveT(pose);
     const d = sign > 0 ? t.hi : t.lo;
-    // 実際に先に当たる壁(方向成分の大小ではなく移動限界を決めた軸から判定)
     const targetWall = sign > 0 ? t.hiWall : t.loWall;
     if (wallContacts(pose).includes(targetWall)) {
-      // 接触済みでも角度がずれていれば、その場で直角へ補正して密着させる
       if (squareUpInPlace()) return;
-      // 直角から ±45° より大きくズレている場合は補正できる壁が無い。抜け方を案内する
       statusEl.textContent = `すでに${targetWall}に触れていますが、向きが直角から45°より大きくずれています。回転ハンドルかQ・Eで向きを整えてからもう一度押してください。`;
       return;
     }
@@ -232,26 +274,26 @@
       sign > 0 ? "壁ドン(前)" : "壁ドン(後)",
       { moveLocked: true, snap: false, alignDeg: WALL_BTN_ALIGN_DEG });
   }
-  // 壁ドン前進・後退: 現在の向きにまっすぐ進み(後退し)、壁に当たった位置で直角へ補正する
-  function wallDonDrive(sign) {
-    driveToWall(sign);
-  }
+
+  function wallDonDrive(sign) { driveToWall(sign); }
+
   function el(tag, attrs = {}) {
     const n = document.createElementNS("http://www.w3.org/2000/svg", tag);
     for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
     return n;
   }
+
   function svgPoint(evt) {
     const p = svg.createSVGPoint();
     p.x = evt.clientX; p.y = evt.clientY;
     const m = svg.getScreenCTM();
-    if (!m) return { x: p.x, y: p.y }; // 非表示・未描画などでCTMが取れないときは等倍で扱う(Firefoxの印刷プレビュー等)
+    if (!m) return { x: p.x, y: p.y };
     return p.matrixTransform(m.inverse());
   }
 
   function snapTheta(theta) {
     const n = norm(theta);
-    if (!snapAngleEl.checked) return norm(Math.round(n * 10) / 10); // 359.96°などが360.0になるのを防ぐ
+    if (!snapAngleEl.checked) return norm(Math.round(n * 10) / 10);
     let best = n, bestD = Infinity;
     for (const c of [0, 90, 180, 270, 360]) {
       const d = Math.abs(deltaAngle(n, c));
@@ -260,15 +302,13 @@
     return bestD <= ANGLE_SNAP_DEG ? best : (Math.round(n * 10) / 10) % 360;
   }
 
-  let csvTruncated = false; // 直近の parseCsv で行数上限により打ち切ったか(呼び出し元が警告文を組み立てる)
+  let csvTruncated = false;
   function parseCsv(text) {
     let rows = text.trim().split(/\r?\n/).map(row => row.split(/[\t,]/).map(v => Number(String(v).trim()))).filter(v => v.length >= 4 && v.slice(0, 4).every(Number.isFinite));
-    // 交差計算は O(n²) のため巨大CSVではフリーズする。安全のため上限で打ち切る
     csvTruncated = rows.length > 2000;
     if (csvTruncated) rows = rows.slice(0, 2000);
     return rows.map((v, i) => ({ id: i + 1, x1: v[0], y1: v[1], x2: v[2], y2: v[3] }));
   }
-  // 打ち切りが起きていたら読込メッセージに注記を足す
   function truncNote() { return csvTruncated ? " ※行数上限のため先頭2000本のみ" : ""; }
 
   function nearestPoint(px, py, line) {
@@ -284,7 +324,7 @@
     const den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
     if (Math.abs(den) < 1e-9) return null;
     const px = ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / den;
-    const py = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / den;
+    const py = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (y3 - y4)) / den;
     const within = (p, a, b) => p >= Math.min(a, b) - .5 && p <= Math.max(a, b) + .5;
     if (within(px, x1, x2) && within(py, y1, y2) && within(px, x3, x4) && within(py, y3, y4)) return { x: px, y: py };
     return null;
@@ -329,7 +369,7 @@
     let t = (target.x - anchor.x) * u.x + (target.y - anchor.y) * u.y;
     let lo = -Infinity, hi = Infinity;
     function bounds(coord, dir, min, max) {
-      if (Math.abs(dir) < 1e-9) { if (coord < min || coord > max) { lo = 0; hi = 0; } return; } // 帯外なら移動禁止(素通しを防ぐ)
+      if (Math.abs(dir) < 1e-9) { if (coord < min || coord > max) { lo = 0; hi = 0; } return; }
       let a = (min - coord) / dir, b = (max - coord) / dir;
       if (a > b) [a, b] = [b, a];
       lo = Math.max(lo, a); hi = Math.min(hi, b);
@@ -416,16 +456,12 @@
 
   function signedForwardCm(from, to) { const u = unit(from.theta); return ((to.x - from.x) * u.x + (to.y - from.y) * u.y) / 10; }
 
-  // ---- タイヤ積算オドメトリ(理論値) ----
-  // 1回の回転で左右タイヤが転がる理論距離(cm・前進を正)。
-  // 超信地旋回: 両輪がトレッド半分の円弧を逆方向に / 信地旋回: 内輪0・外輪はトレッド×角分の弧
   function wheelTravelCm(dDeg, mode) {
     const dr = rad(dDeg);
     if (mode === "信地") return dr > 0 ? { l: dr * TREAD / 10, r: 0 } : { l: 0, r: -dr * TREAD / 10 };
     return { l: dr * TREAD / 2 / 10, r: -dr * TREAD / 2 / 10 };
   }
-  // 履歴全体から左右タイヤの累計移動量を復元する(undo/redo でも常に履歴と整合)。
-  // 直進=両輪同量。信地旋回の歩は中心の並進ではなく外輪の弧として計上(二重計上防止)。
+
   function odometry() {
     let l = 0, r = 0;
     for (const h of history) {
@@ -438,7 +474,6 @@
   }
 
   function robotGhost(p, opacity = .35) {
-    // 本体の SVG と同じ車軸原点の輪郭(前+143/後-100、幅231)
     return `<g transform="translate(${fmt(p.x)} ${fmt(p.y)}) rotate(${fmt(p.theta)})" opacity="${opacity}">
       <rect x="-100" y="-115.5" width="243" height="231" rx="14" fill="rgba(0,0,0,.08)" stroke="#111" stroke-width="6" stroke-dasharray="18 12"></rect>
       <rect x="75.9" y="-111.5" width="63.1" height="223" rx="10" fill="rgba(255,153,0,.30)" stroke="#ff9900" stroke-width="3"></rect>
@@ -448,7 +483,6 @@
 
   function renderTrace() {
     traceLayer.innerHTML = "";
-    // ドラッグ中は数値ラベルを省く(毎フレームの積層を防ぎ、確定時に描かれる)
     const labels = !pointer;
     if (history.length > 1) {
       traceLayer.appendChild(el("polyline", { points: history.map(h => `${fmt(h.x)},${fmt(h.y)}`).join(" "), fill: "none", stroke: "#006ee6", "stroke-width": 7, "stroke-linecap": "round", "stroke-linejoin": "round", "marker-end": "url(#blueArrow)", opacity: .9, "pointer-events": "none" }));
@@ -457,7 +491,6 @@
         const a = history[i - 1], b = history[i];
         const d = Math.hypot(b.x - a.x, b.y - a.y);
 
-        // ひとつ前の位置からの前進・後退量を軌跡上に残す。
         if (labels && d >= .5) {
           const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
           const nx = -(b.y - a.y) / d * 32, ny = (b.x - a.x) / d * 32;
@@ -466,34 +499,20 @@
           traceLayer.appendChild(moveText);
         }
 
-        // 各操作で回転した角度と、回転後の絶対角度を履歴として残す。
         const rot = (typeof b.rot === "number") ? b.rot : deltaAngle(a.theta, b.theta);
         if (labels && Math.abs(rot) >= .05) {
           const radius = 76;
           const path = arcPath(b.x, b.y, radius, a.theta, b.theta);
           if (path) {
             traceLayer.appendChild(el("path", {
-              d: path,
-              fill: "none",
-              stroke: "#e23a48",
-              "stroke-width": 8,
-              "stroke-linecap": "round",
-              "marker-end": "url(#arrow)",
-              "pointer-events": "none"
+              d: path, fill: "none", stroke: "#e23a48", "stroke-width": 8, "stroke-linecap": "round", "marker-end": "url(#arrow)", "pointer-events": "none"
             }));
           }
 
-          // 回転後の向きを短い赤線で表示する。
           const heading = unit(b.theta);
           traceLayer.appendChild(el("line", {
-            x1: b.x,
-            y1: b.y,
-            x2: b.x + heading.x * 108,
-            y2: b.y + heading.y * 108,
-            stroke: "#e23a48",
-            "stroke-width": 8,
-            "stroke-linecap": "round",
-            "pointer-events": "none"
+            x1: b.x, y1: b.y, x2: b.x + heading.x * 108, y2: b.y + heading.y * 108,
+            stroke: "#e23a48", "stroke-width": 8, "stroke-linecap": "round", "pointer-events": "none"
           }));
 
           const mid = a.theta + rot / 2;
@@ -509,9 +528,7 @@
 
     history.forEach((h, i) => {
       traceLayer.appendChild(el("circle", { cx: h.x, cy: h.y, r: i === history.length - 1 ? 14 : 9, fill: i === history.length - 1 ? "#ff9900" : "#006ee6", stroke: "#fff", "stroke-width": 4 }));
-      // 壁ドンした地点には目印を残す
       if (h.wallDon) {
-        // ロボットの外周(最大半対角 約184mm=√(143²+115.5²))より外側に置かないとロボットの絵に隠れる
         const t = el("text", { x: h.x + (h.x < FIELD_W / 2 ? 260 : -260), y: h.y + (h.y < FIELD_H / 2 ? 260 : -260), "text-anchor": "middle", class: "wallDonLabel" });
         t.textContent = h.wallDon.corrected === null ? "壁ドン(角度大)" : "壁ドン";
         traceLayer.appendChild(t);
@@ -524,14 +541,13 @@
     const s = norm(a0), e = s + da;
     const x0 = cx + Math.cos(rad(s)) * r, y0 = cy + Math.sin(rad(s)) * r;
     const x1 = cx + Math.cos(rad(e)) * r, y1 = cy + Math.sin(rad(e)) * r;
-    return `M ${fmt(x0)} ${fmt(y0)} A ${r} ${r} 0 0 ${da >= 0 ? 1 : 0} ${fmt(x1)} ${fmt(y1)}`; // deltaAngleの値域は±180°なのでlarge-arcフラグは常に0
+    return `M ${fmt(x0)} ${fmt(y0)} A ${r} ${r} 0 0 ${da >= 0 ? 1 : 0} ${fmt(x1)} ${fmt(y1)}`;
   }
 
   function renderMeasure(snap = null) {
     oldLayer.innerHTML = robotGhost(beforePose);
-    // 前回走行の軌跡を薄い破線で重ねて表示する(試走比較用。undo 対象外)
     if (prevRun && prevRun.length > 1) {
-      oldLayer.appendChild(el("polyline", { points: prevRun.map(p => `${fmt(p.x)},${fmt(p.y)}`).join(" "), fill: "none", stroke: "#5b6570", "stroke-width": 6, "stroke-dasharray": "20 14", opacity: .55, "pointer-events": "none" })); // 緑は黒線の緑芯と混ざるため灰青系で比較表示
+      oldLayer.appendChild(el("polyline", { points: prevRun.map(p => `${fmt(p.x)},${fmt(p.y)}`).join(" "), fill: "none", stroke: "#5b6570", "stroke-width": 6, "stroke-dasharray": "20 14", opacity: .55, "pointer-events": "none" }));
     }
     measureLayer.innerHTML = "";
     const move = Math.hypot(pose.x - beforePose.x, pose.y - beforePose.y) / 10;
@@ -556,13 +572,11 @@
     if (snap) {
       const x = snap.node?.x ?? snap.x, y = snap.node?.y ?? snap.y;
       snapLayer.appendChild(el("circle", { cx: x, cy: y, r: snap.type === "junction" ? 30 : 24, fill: "none", stroke: snap.type === "junction" ? "#e23a48" : "#13b955", "stroke-width": 7, "stroke-dasharray": "10 7" }));
-      // 右端付近ではラベルを左に置かないとはみ出す
       const flip = x > FIELD_W * 0.72;
       const label = el("text", { x: x + (flip ? -36 : 36), y: y - 24, "text-anchor": flip ? "end" : "start", class: "smallLabel" });
       label.textContent = snap.type === "junction" ? "交差点吸着" : "黒線吸着";
       snapLayer.appendChild(label);
     }
-    // 累計走行距離(後退も距離として加算)、左右タイヤの積算移動量、最寄り壁までの距離、接触中の壁、経過時間を readout に添える
     const totalCm = history.reduce((s, h) => s + Math.abs(h.signedCm ?? h.moveCm ?? 0), 0);
     const odo = odometry();
     const [wallName, wallDist] = nearestWallDist(pose);
@@ -583,7 +597,6 @@
     }
   }
 
-  // ---- 走行履歴パネル(1歩ごとの前後cm・回転°と累計) ----
   function renderHistoryPanel() {
     const list = $("historyList");
     if (!list) return;
@@ -611,7 +624,6 @@
     updateHistoryButtons();
   }
 
-  // ---- 元に戻す・やり直し(状態まるごとのスナップショット方式) ----
   function stateJson() { return JSON.stringify({ history, pose, beforePose }); }
   function restoreState(json) {
     const s = JSON.parse(json);
@@ -642,10 +654,8 @@
     let prepared;
     if (opts.moveLocked) prepared = opts.snap ? snapOnDriveAxis(next, old) : { pose: constrainToDriveAxis(next, old), snap: null };
     else if (opts.snap) prepared = snapFree(next);
-    else prepared = { pose: { ...next }, snap: null }; // 回転の信地旋回変換はキー/プレビュー側で済ませている
-    // 角度は prepared のものを正とする(回転キーは吸着に潰されず、壁ドンの当たり計算と矛盾しない)
+    else prepared = { pose: { ...next }, snap: null };
     let p = clampToWalls({ x: prepared.pose.x, y: prepared.pose.y, theta: norm(prepared.pose.theta) });
-    // 壁ドン: 前後移動(drive)で新たに壁へ押しつけたときだけ向き補正を行う
     let wallDon = null;
     if (opts.moveLocked) {
       const r = applyWallDon(old, p, opts.alignDeg ?? WALL_ALIGN_DEG);
@@ -655,17 +665,14 @@
     const moveCm = Math.hypot(p.x - old.x, p.y - old.y) / 10;
     const signedCm = signedForwardCm(old, p);
     const rot = deltaAngle(old.theta, p.theta);
-    // 信地旋回かどうかは呼び出し側(キー/回転ハンドル)が opts.turn="one" で明示する。
-    // moveCm からの推定は壁ドン補正(移動+小回転)を信地と誤記録するため廃止。
     const pivotTurn = Math.abs(rot) >= .05 && opts.turn === "one";
     if (moveCm < .01 && Math.abs(rot) < .01) { statusEl.setAttribute("aria-live", "polite"); renderMeasure(prepared.snap); return; }
     undoStack.push(stateJson());
     if (undoStack.length > 200) undoStack.shift();
     redoStack.length = 0;
-    if (runStart === null) runStart = Date.now(); // 経過時間計測は最初の操作で開始
+    if (runStart === null) runStart = Date.now();
     beforePose = old; pose = p;
     history.push({ ...pose, moveCm, signedCm, rot, wallDon, turn: pivotTurn ? "信地" : null });
-    // 先頭(=開始位置の目印)を残しつつ、切り捨てた移動量を最初の残存エントリへ合算してオドメトリの整合を保つ
     if (history.length > 200) {
       const dropped = history.slice(1, history.length - 199);
       const acc = dropped.reduce((a, h) => ({ moveCm: a.moveCm + (h.moveCm || 0), signedCm: a.signedCm + (h.signedCm || 0) }), { moveCm: 0, signedCm: 0 });
@@ -681,27 +688,24 @@
         Math.abs(wallDon.corrected) < .05 ? ` / 壁ドン(${wallDon.walls.join("・")}、直角どおり)` :
           ` / 壁ドン(${wallDon.walls.join("・")}、θ${wallDon.corrected > 0 ? "+" : ""}${fmt(wallDon.corrected, 0)}°補正)`;
     const turnMsg = pivotTurn ? " / 信地旋回" : "";
-    statusEl.setAttribute("aria-live", "polite"); // 確定メッセージは通知する
+    statusEl.setAttribute("aria-live", "polite");
     statusEl.textContent = `${reason}: ${kind} ${signedCmText(signedCm)}、回転 ${rot > 0 ? "+" : ""}${fmt(rot, 0)}°${snapMsg}${donMsg}${turnMsg}`;
     renderAll(prepared.snap);
     saveLocal();
   }
 
   function onDown(evt) {
-    if (evt.isPrimary === false || pointer) return; // 多重タッチ・操作中の二度押しは無視
+    if (evt.isPrimary === false || pointer) return;
     const p = svgPoint(evt); svg.focus();
-    // ドラッグ中は毎フレーム status が書き換わるためスクリーンリーダーへの通知を止める(確定時に復帰)
     statusEl.setAttribute("aria-live", "off");
-    // 中ボタン / Shift+ドラッグ は表示の平行移動(ロボット上でも優先)
     if (evt.button === 1 || (!evt.button && evt.shiftKey)) {
       pointer = { type: "pan", id: evt.pointerId, cx: evt.clientX, cy: evt.clientY };
       try { svg.setPointerCapture(evt.pointerId); } catch (_) { }
       evt.preventDefault();
       return;
     }
-    statusEl.setAttribute("aria-live", "polite"); // ここから先はジェスチャを開始せず終わる
-    if (evt.button !== 0) return; // 右クリック等は前後移動に使わない
-    // Alt+ドラッグ は2点間の距離を測るものさしツール
+    statusEl.setAttribute("aria-live", "polite");
+    if (evt.button !== 0) return;
     if (evt.altKey) {
       pointer = { type: "measure", id: evt.pointerId, a: p };
       try { svg.setPointerCapture(evt.pointerId); } catch (_) { }
@@ -724,7 +728,6 @@
     if (!pointer || evt.pointerId !== pointer.id) return;
     const p = svgPoint(evt); evt.preventDefault();
     if (pointer.type === "pan") {
-      // 前回クライアント座標を現在のCTMで変換し直して差分を取る(viewBox更新のフィードバックで半分の速度になるのを防ぐ)
       const q = svgPoint({ clientX: pointer.cx, clientY: pointer.cy });
       view.x -= p.x - q.x;
       view.y -= p.y - q.y;
@@ -733,7 +736,6 @@
       return;
     }
     if (pointer.type === "measure") {
-      // 2点間の直線距離を表示するだけ(確定も記録もしない揮発性ツール)
       measureLayer.innerHTML = "";
       measureLayer.appendChild(el("line", { x1: pointer.a.x, y1: pointer.a.y, x2: p.x, y2: p.y, stroke: "#5b6570", "stroke-width": 6, "stroke-dasharray": "16 10", "marker-end": "url(#blueArrow)", "pointer-events": "none" }));
       const t = el("text", { x: (pointer.a.x + p.x) / 2, y: (pointer.a.y + p.y) / 2 - 24, "text-anchor": "middle", class: "bigLabel" });
@@ -743,7 +745,6 @@
     }
     if (pointer.type === "rotate") {
       const target = snapTheta(deg(Math.atan2(p.y - pointer.anchor.y, p.x - pointer.anchor.x)));
-      // 信地旋回ONのときは固定タイヤ周りで弧を描く(rotatedPose が位置も計算)
       pose = clampToWalls(rotatedPose(pointer.anchor, deltaAngle(pointer.anchor.theta, target)));
       statusEl.textContent = `回転中: θ ${fmt(pose.theta)}°${pivotToggleEl.checked ? "(信地旋回)" : ""}`;
       renderAll();
@@ -768,13 +769,13 @@
     commit(next, pointer.type === "rotate" ? "向き変更" : "前後ドラッグ", pointer.type === "rotate" ? { moveLocked: false, snap: false, turn: pivotToggleEl.checked ? "one" : undefined } : { moveLocked: true, snap: true });
     pointer = null;
   }
-  // ジェスチャ中断(ブラウザに横取りされた等): 記録せず元の位置へ戻す
+
   function onCancel(evt) {
     if (!pointer || evt.pointerId !== pointer.id) return;
     statusEl.setAttribute("aria-live", "polite");
     try { svg.releasePointerCapture(pointer.id); } catch (_) { }
     if (pointer.type !== "pan" && pointer.type !== "measure") {
-      pose = { ...pointer.anchor }; // 未確定の移動は破棄
+      pose = { ...pointer.anchor };
       statusEl.textContent = "操作を中断しました。位置は移動前の状態です。";
       renderAll();
     }
@@ -782,45 +783,38 @@
     pointer = null;
   }
 
-  // ---- 作業状態の自動保存(file:// でも続けられるよう lines.csv の中身も一緒に保存) ----
   function saveLocal() {
     try {
       localStorage.setItem(LS_KEY, JSON.stringify({ history, pose, beforePose, csv: csvText, pivot: pivotToggleEl.checked }));
       saveFailedNoted = false;
     } catch (_) {
-      // 保存できない環境(プライベートモード等)では一度だけ通知して継続
       if (!saveFailedNoted) {
         saveFailedNoted = true;
         statusEl.textContent = "作業状態の自動保存ができません(プライベートモード等)。このまま操作は続けられます。";
       }
     }
   }
+
   function readSavedState() {
     try { return JSON.parse(localStorage.getItem(LS_KEY) || "null"); } catch (_) { return null; }
   }
-  // 保存してあった軌跡と位置を復元する(復元できたら true)。
-  // 履歴や姿勢が壊れている場合は false を返して初期状態から始める(描画クラッシュ防止)。
+
   function tryRestore(clearStacks = true) {
     const s = readSavedState();
     const okPose = p => !!p && [p.x, p.y, p.theta].every(Number.isFinite);
     if (!s || !Array.isArray(s.history) || !s.history.length) return false;
     if (!okPose(s.pose)) return false;
     if (!s.history.every(h => h && okPose(h))) return false;
-    // 旧形式の保存データ(rot/signedCm 等が欠けたエントリ)は既定値で埋めて復元する。
-    // wallDon は形状が壊れていると CSV 出力が落ちるため、ここで形を整えておく。
     const num = (v, d = 0) => Number.isFinite(v) ? v : d;
-    // rot は ±360°を超える異常値を 0 に落とす(表示・オドメトリの破綻防止)
     const okRot = v => { const n = num(v); return Math.abs(n) <= 360 ? n : 0; };
-    // 壁名はホワイトリスト照合(不正な文字列が備考の半角カンマ等で CSV の列を割るのを防ぐ)
     const okWallDon = w => !!w && Array.isArray(w.walls) && w.walls.length > 0 && w.walls.every(x => ["左壁", "右壁", "上壁", "下壁"].includes(x)) && (w.corrected === null || Number.isFinite(w.corrected));
     let restored = (s.history.length > 200 ? [s.history[0], ...s.history.slice(-199)] : s.history).map(h => ({
       ...h,
       theta: norm(num(h.theta)),
       moveCm: num(h.moveCm), signedCm: num(h.signedCm), rot: okRot(h.rot),
       wallDon: okWallDon(h.wallDon) ? { walls: h.wallDon.walls, corrected: h.wallDon.corrected } : null,
-      turn: h.turn === "信地" ? "信地" : null, // turn も正規化(odometry の判定と表示を揃える)
+      turn: h.turn === "信地" ? "信地" : null,
     }));
-    // 先頭保護トリムで捨てた分の移動量を最初の残存エントリへ合算(commit 側と同じオドメトリ整合)
     if (restored.length > 200) {
       const dropped = restored.slice(1, restored.length - 199);
       const acc = dropped.reduce((a, h) => ({ moveCm: a.moveCm + (h.moveCm || 0), signedCm: a.signedCm + (h.signedCm || 0) }), { moveCm: 0, signedCm: 0 });
@@ -832,14 +826,13 @@
     history = restored;
     pose = clampToWalls({ ...s.pose, theta: norm(num(s.pose.theta)) });
     beforePose = okPose(s.beforePose) ? clampToWalls({ ...s.beforePose, theta: norm(num(s.beforePose.theta)) }) : { ...pose };
-    // 旋回モードの復元(旧形式で pivot が無い場合は現在値のまま)
     if (pivotToggleEl && (s.pivot === true || s.pivot === false)) pivotToggleEl.checked = s.pivot;
     if (clearStacks) { undoStack.length = 0; redoStack.length = 0; }
     return true;
   }
 
   async function loadCsvAuto() {
-    const firstRun = !readSavedState(); // 保存が一切無ければ真の初回起動(ヘルプを見せたままにする)
+    const firstRun = !readSavedState();
     try {
       const res = await fetch("lines.csv", { cache: "no-store" });
       if (!res.ok) throw new Error(`${res.status}`);
@@ -850,16 +843,13 @@
       if (!restored) {
         const init = snapFree(pose); pose = init.pose; beforePose = { ...pose }; history = [{ ...pose, moveCm: 0, signedCm: 0, rot: 0 }];
       }
-      // 黒線0本は手編集ミス等の可能性が高いので目立たせる
       const zeroNote = lines.length ? "" : " ※黒線が0本です。CSVの中身を確認してください。";
       statusEl.textContent = `lines.csv を読み込みました${restored ? "(前回の軌跡を復帰)" : ""}: 黒線 ${lines.length}本 / 交差点 ${nodes.filter(n => n.type === "junction").length}個${truncNote()}${zeroNote}`;
       filePanel.open = firstRun;
-      // 初回起動時だけ走行履歴パネルも開いて存在を知らせる
       const histPanelEl = $("historyPanel");
       if (histPanelEl && firstRun) histPanelEl.open = true;
       saveLocal(); renderAll();
     } catch (e) {
-      // 自動読込に失敗したら、前回保存したCSVと軌跡で続行を試みる
       const s = readSavedState();
       if (s && s.csv) {
         csvText = s.csv; lines = parseCsv(csvText);
@@ -867,7 +857,6 @@
         statusEl.textContent = `lines.csv を自動読込できず、前回保存分で再開しました: 黒線 ${lines.length}本${truncNote()}`;
         tryRestore(); saveLocal(); renderAll();
       } else {
-        // CSVが無くても、保存してある軌跡・位置は復元する(CSVは後から読める)
         const restored = tryRestore();
         statusEl.textContent = restored
           ? "lines.csv を自動読込できませんが、前回の軌跡で再開しました。『ヘルプと手動読込』からCSVを選べます。"
@@ -879,7 +868,6 @@
   }
 
   function loadCsvText(text, source = "lines.csv", keepTrace = false) {
-    // 読込前の状態を undo できるようにチェックポイントを積む(再読込で軌跡が消えても戻せる)
     undoStack.push(stateJson());
     if (undoStack.length > 200) undoStack.shift();
     redoStack.length = 0;
@@ -893,22 +881,17 @@
     saveLocal(); renderAll();
   }
 
-  // ---- 軌跡のコマンド列を出力する ----
   function buildCommands() {
     const rows = [["手順", "操作", "距離cm", "回転°", "絶対角度°", "x mm", "y mm", "備考"]];
     history.forEach((h, i) => {
       if (i === 0) { rows.push([0, "開始", "", 0, fmt(h.theta, 0), fmt(h.x), fmt(h.y), ""]); return; }
       const kind = h.signedCm < -0.01 ? "後退" : h.signedCm > 0.01 ? "前進" : "その場";
-      // 備考の区切りは全角カンマ(半角だとCSVの列を割ってしまう)
-      // 備考は複数要素を「/」で連結(区切りに半角カンマは使わない=CSV列を割らない)
       const parts = [];
       if (h.wallDon) parts.push(`壁ドン(${h.wallDon.walls.join("・")}${h.wallDon.corrected === null ? "，角度大" : Math.abs(h.wallDon.corrected) < .05 ? "" : `，${fmt(h.wallDon.corrected, 0)}°補正`})`);
       if (h.turn) parts.push("信地旋回");
       const note = parts.join("/");
-      // 先頭に + を付けない(Excel が数式と誤認するのを防ぐ)
       rows.push([i, kind, kind === "その場" ? "" : fmt(h.signedCm ?? 0), fmt(h.rot, 0), fmt(h.theta, 0), fmt(h.x), fmt(h.y), note]);
     });
-    // 集計サマリ行(実機への転記漏れチェック・オドメトリ総量の見積り用)
     let fwdCm = 0, backCm = 0, rotSum = 0, donCount = 0, pivotCount = 0;
     history.forEach((h, i) => {
       if (!i) return;
@@ -918,7 +901,6 @@
       if (h.wallDon) donCount++;
       if (h.turn === "信地") pivotCount++;
     });
-    // 左右タイヤの積算(実機のエンコーダ期待値の見積り用)
     const odo = odometry();
     rows.push(["計", `前進${fmt(fwdCm)}cm/後退${fmt(backCm)}cm`, "", "", "", "", "", `回転計${fmt(rotSum, 0)}°/壁ドン${donCount}回/信地${pivotCount}回/左輪${fmt(odo.l)}cm・右輪${fmt(odo.r)}cm`]);
     return rows.map(r => r.join(",")).join("\r\n");
@@ -928,22 +910,20 @@
   svg.addEventListener("pointermove", onMove);
   svg.addEventListener("pointerup", onUp);
   svg.addEventListener("pointercancel", onCancel);
-  // ホイールで拡大縮小(カーソル位置を基準)。トラックパッドの小刻みスクロールにも自然に追従させる
   svg.addEventListener("wheel", evt => {
     evt.preventDefault();
-    if (evt.deltaY === 0) return; // 横スクロールだけのイベントは無視
-    if (!svg.getScreenCTM()) return; // CTMが取れないときは生pxを座標として扱わない(view暴走防止)
+    if (evt.deltaY === 0) return;
+    if (!svg.getScreenCTM()) return;
     const p = svgPoint(evt);
-    // ホイールを上げると拡大(deltaY<0→factor<1)、下げると縮小。地図系アプリと同じ向き
     zoomAt(p.x, p.y, Math.exp(evt.deltaY * 0.002));
   }, { passive: false });
   svg.addEventListener("contextmenu", evt => { if (evt.shiftKey || pointer) evt.preventDefault(); });
-  // キーボード操作は document レベルで受ける(ボタンクリック後もフォーカス依存で無反応にならないように)
+
   document.addEventListener("keydown", evt => {
-    if (evt.ctrlKey || evt.metaKey || evt.altKey) return; // Ctrl系は下のショートカット用ハンドラへ
+    if (evt.ctrlKey || evt.metaKey || evt.altKey) return;
     const tag = (evt.target && evt.target.tagName) || "";
     if (tag === "TEXTAREA" || tag === "SELECT") return;
-    if (tag === "INPUT" && evt.target.type !== "checkbox") return; // チェックボックスにフォーカスが残っていてもショートカットを生かす
+    if (tag === "INPUT" && evt.target.type !== "checkbox") return;
     const move = evt.shiftKey ? 50 : 10, turn = evt.shiftKey ? 15 : 5;
     let next = { ...pose }, opts = { moveLocked: true, snap: true }, reason = "キー操作";
     if (evt.key === "ArrowUp") { const u = unit(pose.theta); next.x += u.x * move; next.y += u.y * move; reason = "前進"; }
@@ -961,17 +941,17 @@
     evt.preventDefault(); commit(next, reason, opts);
   });
 
-  // ---- 初期位置へ戻す(軌跡もリセット。Ctrl+Z で取り消し可能) ----
+  // ---- 初期位置へ戻す ----
   function resetHome() {
-    const target = clampToWalls({ x: DEFAULT_POSE.x, y: DEFAULT_POSE.y, theta: DEFAULT_POSE.theta });
+    const target = clampToWalls({ x: initPos.x, y: initPos.y, theta: initPos.theta });
     if (history.length === 1 && dist(pose, target) < .01 && Math.abs(deltaAngle(pose.theta, target.theta)) < .01) {
       statusEl.textContent = "すでに初期位置です。";
-      return; // 無変化ならundoスナップショットを積まない
+      return;
     }
     undoStack.push(stateJson());
     if (undoStack.length > 200) undoStack.shift();
     redoStack.length = 0;
-    if (history.length > 1) prevRun = history.map(h => ({ x: h.x, y: h.y })); // 前回走行として退避
+    if (history.length > 1) prevRun = history.map(h => ({ x: h.x, y: h.y }));
     runStart = null;
     pose = target;
     beforePose = { ...pose };
@@ -985,7 +965,7 @@
     undoStack.push(stateJson());
     if (undoStack.length > 200) undoStack.shift();
     redoStack.length = 0;
-    if (history.length > 1) prevRun = history.map(h => ({ x: h.x, y: h.y })); // 前回走行として退避
+    if (history.length > 1) prevRun = history.map(h => ({ x: h.x, y: h.y }));
     runStart = null;
     beforePose = { ...pose }; history = [{ ...pose, moveCm: 0, signedCm: 0, rot: 0 }];
     statusEl.textContent = "軌跡をクリアしました。(Ctrl+Zで元に戻せます)";
@@ -999,7 +979,7 @@
   showCourseEl.addEventListener("change", renderCourse);
   gridToggleEl.addEventListener("change", renderGrid);
   snapAngleEl.addEventListener("change", () => { statusEl.textContent = snapAngleEl.checked ? `角度吸着ON: 0/90/180/270°の±${ANGLE_SNAP_DEG}°だけ吸着します。` : "角度吸着OFF"; });
-  // 旋回モードの切替(チェックボックスと T キーの共通窓口。状態は自動保存に載る)
+
   function setPivotMode(on) {
     pivotToggleEl.checked = on;
     statusEl.textContent = on ? "信地旋回ON: 片輪を固定して弧を描くように回ります(回転中に位置が変わります)。T で切替。" : "信地旋回OFF(超信地): その場で回転します。T で切替。";
@@ -1007,7 +987,7 @@
   }
   pivotToggleEl.addEventListener("change", () => setPivotMode(pivotToggleEl.checked));
   snapLineEl.addEventListener("change", () => { statusEl.textContent = snapLineEl.checked ? "黒線吸着ON: 移動先が黒線・交差点に近いと吸着します。" : "黒線吸着OFF"; });
-  $("csvInput").addEventListener("change", evt => { const f = evt.target.files?.[0]; evt.target.blur(); /* ファイルダイアログ後もショートカットキーを生かす */ if (f) { f.text().then(t => loadCsvText(t, f.name, false)); } });
+  $("csvInput").addEventListener("change", evt => { const f = evt.target.files?.[0]; evt.target.blur(); if (f) { f.text().then(t => loadCsvText(t, f.name, false)); } });
   undoBtn.addEventListener("click", undo);
   redoBtn.addEventListener("click", redo);
   copyBtn.addEventListener("click", async () => {
@@ -1025,7 +1005,6 @@
     statusEl.textContent = ok ? "コマンド列をクリップボードにコピーしました(タブ区切り)。" : "クリップボードにコピーできませんでした。CSV出力を使ってください。";
   });
   csvBtn.addEventListener("click", () => {
-    // Excel で文字化けしないよう BOM 付き UTF-8 で保存する
     const blob = new Blob(["\ufeff" + buildCommands()], { type: "text/csv" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -1033,12 +1012,10 @@
     document.body.appendChild(a);
     a.click();
     a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    setTimeout(() => URL.ObjectURL.revokeObjectURL(a.href), 1000);
     statusEl.textContent = "コマンド列を commands.csv に保存しました。";
   });
-  // ---- フィールド背景の自動読み込み(HTMLへの画像埋め込みは無し) ----
-  // 1) Scan.py が生成した field_bg.jpg を最優先で読む(オフラインでも確実に動く)
-  // 2) 無ければ field.pdf を pdf.js(CDN)で描画して表示する(オンライン時のみ)
+
   const PDFJS_URL = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js";
   const PDFJS_WORKER_URL = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
   let pdfLibPromise = null;
@@ -1056,9 +1033,8 @@
     }
     return pdfLibPromise;
   }
-  let bgUrl = ""; // 現在の背景(blob: / data: / 相対パス)
+  let bgUrl = "";
   function setBg(url, { hideWrapOnError = false } = {}) {
-    // 差し替え前の blob: URL は解放する(data:/相対パスは解放不要)
     if (bgUrl && /^blob:/.test(bgUrl) && bgUrl !== url) {
       try { URL.revokeObjectURL(bgUrl); } catch (_) { }
     }
@@ -1090,7 +1066,6 @@
       if (!quiet) statusEl.textContent = `${name} を背景に表示しました。(黒線はCSVから描画)`;
       return true;
     } catch (e) {
-      // 失敗時は以前の背景があればそれを維持し、無い場合だけ案内を出して隠す
       if (!bgUrl) {
         setBg("", { hideWrapOnError: true });
         if (!quiet) statusEl.textContent = `${name} を背景にできません(${e && e.message ? e.message : "エラー"})。オフライン時はCSVの黒線のみで動作します。`;
@@ -1100,34 +1075,31 @@
       return false;
     }
   }
-  // field_bg.jpg の読込(file:// でも同じフォルダの画像は表示できる)
+
   function loadJpgAuto() {
     return new Promise(resolve => {
       const probe = new Image();
-      probe.onload = () => {
-        setBg(probe.src);
-        resolve(true);
-      };
+      probe.onload = () => { setBg(probe.src); resolve(true); };
       probe.onerror = () => resolve(false);
       probe.src = "field_bg.jpg";
     });
   }
+
   async function loadPdfAuto() {
-    if (location.protocol === "file:") return false; // file:// では fetch 不可、静かに諦める
+    if (location.protocol === "file:") return false;
     try {
       const res = await fetch("field.pdf", { cache: "no-store" });
       if (!res.ok) throw new Error(`${res.status}`);
-      // quiet=true: 起動時は CSV 読込メッセージを壊さないようステータスに出力しない
       return await renderPdfBackground(await res.arrayBuffer(), "field.pdf", true);
-    } catch (_) { return false; /* PDF背景なしで続行 */ }
+    } catch (_) { return false; }
   }
-  // 起動時: field_bg.jpg → 駄目なら field.pdf(pdf.js) の順で試す
+
   async function loadBackgroundAuto() {
     if (await loadJpgAuto()) return;
     await loadPdfAuto();
   }
+
   bgToggleEl.addEventListener("change", () => {
-    // checked を見てから復帰させる(二重 change で未チェックなのに表示されるのを防ぐ)
     if (bgEl.style.display === "none" && bgUrl && bgToggleEl.checked) {
       bgEl.style.display = "";
     } else {
@@ -1135,9 +1107,10 @@
     }
     statusEl.textContent = bgToggleEl.checked ? "背景画像を表示しました。" : "背景画像を隠しました。";
   });
+
   $("bgInput").addEventListener("change", async evt => {
     const f = evt.target.files?.[0];
-    evt.target.blur(); // ファイルダイアログ後もショートカットキーを生かす
+    evt.target.blur();
     if (!f) return;
     if (/\.pdf$/i.test(f.name) || f.type === "application/pdf") {
       await renderPdfBackground(await f.arrayBuffer(), f.name);
@@ -1147,7 +1120,6 @@
     }
   });
 
-  // ---- CSV / PDF / 画像のドラッグ&ドロップ読み込み ----
   window.addEventListener("dragover", evt => { evt.preventDefault(); });
   window.addEventListener("drop", async evt => {
     evt.preventDefault();
@@ -1167,20 +1139,20 @@
     if (!(evt.ctrlKey || evt.metaKey)) return;
     const tag = (evt.target && evt.target.tagName) || "";
     if (tag === "TEXTAREA" || tag === "SELECT") return;
-    if (tag === "INPUT" && evt.target.type !== "checkbox") return; // チェックボックスにフォーカスが残っていてもショートカットを生かす
+    if (tag === "INPUT" && evt.target.type !== "checkbox") return;
     const k = evt.key.toLowerCase();
     if (k === "z" && !evt.shiftKey) { evt.preventDefault(); undo(); }
     else if ((k === "z" && evt.shiftKey) || k === "y") { evt.preventDefault(); redo(); }
   });
 
+  loadInitPos();
   applyView();
   renderCourse(); renderGrid(); renderAll(); loadCsvAuto(); loadBackgroundAuto();
 
-  // 開発用: node スモークテストから内部状態を触るための窓口
   window.simDebug = { get pose() { return pose; }, get history() { return history; }, commit, undo, redo, wallContacts, clampToWalls, applyWallDon, wallDonDrive, driveToWall, resetHome, parseCsv, snapFree, buildCommands, zoomAt, fitView, rotatedPose, extentXF, extentXB, extentYU, extentYD, setPivotMode, renderHistoryPanel, odometry, wheelTravelCm, get pivotOn() { return !!(pivotToggleEl && pivotToggleEl.checked); }, get view() { return view; } };
 })();
 
-// パネルをドラッグ移動できるようにする処理
+// パネルのドラッグ移動処理
 (() => {
   const panel = document.querySelector('.filePanel');
   if (!panel) return;
@@ -1189,51 +1161,40 @@
   if (!handle) return;
 
   let isDragging = false;
-  let hasMoved = false; // ドラッグ（移動）したかどうか
+  let hasMoved = false;
   let startX = 0, startY = 0;
   let initialLeft = 0, initialTop = 0;
 
-  // 1. マウス/タッチが押されたとき
   handle.addEventListener('pointerdown', (e) => {
-    // マウスの左クリック（またはタッチ操作）以外は無視
     if (e.button !== 0) return;
-
     isDragging = true;
     hasMoved = false;
     startX = e.clientX;
     startY = e.clientY;
 
-    // 現在のパネルの位置を取得
     const rect = panel.getBoundingClientRect();
     initialLeft = rect.left;
     initialTop = rect.top;
 
-    // 位置指定を left / top に統一
     panel.style.right = 'auto';
     panel.style.bottom = 'auto';
 
-    // 画面外にマウスが出ても追従するようにポインターをキャプチャ
     handle.setPointerCapture(e.pointerId);
   });
 
-  // 2. マウス/タッチを動かしているとき
   handle.addEventListener('pointermove', (e) => {
     if (!isDragging) return;
-
     const dx = e.clientX - startX;
     const dy = e.clientY - startY;
 
-    // 5ピクセル以上動いたら「ドラッグ移動した」と判定
     if (Math.hypot(dx, dy) > 5) {
       hasMoved = true;
     }
 
-    // パネルの位置を更新
     panel.style.left = `${initialLeft + dx}px`;
     panel.style.top = `${initialTop + dy}px`;
   });
 
-  // 3. マウス/タッチを離したとき
   const stopDrag = (e) => {
     if (!isDragging) return;
     isDragging = false;
@@ -1245,10 +1206,9 @@
   handle.addEventListener('pointerup', stopDrag);
   handle.addEventListener('pointercancel', stopDrag);
 
-  // 4. ドラッグ移動した場合は、クリックによるパネルの「開閉」をキャンセルする
   handle.addEventListener('click', (e) => {
     if (hasMoved) {
-      e.preventDefault(); // 移動していたら開閉しない
+      e.preventDefault();
       hasMoved = false;
     }
   });

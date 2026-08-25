@@ -37,6 +37,16 @@
     <button id="csvBtn" type="button" title="コマンド列をCSV保存">CSV出力</button>
     <div class="status" id="status" aria-live="polite">
       移動量と回転角を軌跡に記録します。壁への前後移動で壁ドン(向き補正)、Alt+ドラッグで距離測定ができます。操作詳細は『ヘルプと手動読込』へ。</div>
+    <!-- 初期位置設定グループ -->
+    <div class="init-pos-controls" style="display: inline-flex; align-items: center; gap: 6px; margin-left: 10px;">
+      <span>【初期位置】</span>
+      <label>X: <input id="initX" type="number" value="186.4" step="1" style="width: 65px;"></label>
+      <label>Y: <input id="initY" type="number" value="956.7" step="1" style="width: 65px;"></label>
+      <label>角度: <input id="initAngle" type="number" value="0" step="90" style="width: 55px;">°</label>
+
+      <button id="setInitBtn" type="button" title="現在のロボットの位置を初期位置にします">現在地をセット</button>
+      <!-- <button id="resetInitBtn" type="button" title="初期位置へリセットします">初期位置に戻る</button> -->
+    </div>
     <div class="readout" id="readout">x 186.4 / y 956.7 / θ 0.0° / 0.0cm / 累計 0.0cm / 輪L 0.0cm・輪R 0.0cm / 壁まで下壁71mm / 経過
       0.0秒</div>
   </header>
