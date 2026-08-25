@@ -170,17 +170,32 @@
   const WHEEL_LOCAL_X = 0;
   const WHEEL_LOCAL_Y = TREAD / 2;
 
-  function rotatedPose(anchor, delta) {
+  // 1. rotatedPose の修正（第3引数 isBackward を追加）
+  function rotatedPose(anchor, delta, isBackward = false) {
     const th = norm(anchor.theta + delta);
     if (!pivotToggleEl.checked || Math.abs(delta) < 1e-9) return { x: anchor.x, y: anchor.y, theta: th };
     const r = rad(anchor.theta), c = Math.cos(r), s = Math.sin(r);
     const px = WHEEL_LOCAL_X;
-    const py = (delta > 0 ? WHEEL_LOCAL_Y : -WHEEL_LOCAL_Y);
+
+    // 後進時は回転軸となる車輪（py）を反転する
+    const py = (delta > 0 ? WHEEL_LOCAL_Y : -WHEEL_LOCAL_Y) * (isBackward ? -1 : 1);
     const pxw = anchor.x + (px * c - py * s);
     const pyw = anchor.y + (px * s + py * c);
     const dr = rad(delta), dc = Math.cos(dr), ds = Math.sin(dr);
     const vx = anchor.x - pxw, vy = anchor.y - pyw;
     return { x: pxw + vx * dc - vy * ds, y: pyw + vx * ds + vy * dc, theta: th };
+  }
+
+  // 3. executePivotTurn 関数の修正
+  function executePivotTurn(angleDeg, isBackward = false) {
+    const nextPose = rotatedPose(pose, angleDeg, isBackward);
+
+    commit(nextPose, `${isBackward ? '後進' : ''}信地旋回(${angleDeg}°)`, {
+      moveLocked: false,
+      snap: false,
+      turn: "one",
+      back: isBackward
+    });
   }
 
   function wallContacts(p) {
@@ -743,10 +758,17 @@
       measureLayer.appendChild(t);
       return;
     }
+
+    // 正しい onMove 内の処理
     if (pointer.type === "rotate") {
       const target = snapTheta(deg(Math.atan2(p.y - pointer.anchor.y, p.x - pointer.anchor.x)));
-      pose = clampToWalls(rotatedPose(pointer.anchor, deltaAngle(pointer.anchor.theta, target)));
-      statusEl.textContent = `回転中: θ ${fmt(pose.theta)}°${pivotToggleEl.checked ? "(信地旋回)" : ""}`;
+      const delta = deltaAngle(pointer.anchor.theta, target);
+
+      const isBackward = evt.shiftKey;
+      pointer.isBackward = isBackward;
+
+      pose = clampToWalls(rotatedPose(pointer.anchor, delta, isBackward));
+      statusEl.textContent = `回転中: θ ${fmt(pose.theta)}°${pivotToggleEl.checked ? (isBackward ? "(後進信地)" : "(信地旋回)") : ""}`;
       renderAll();
     } else {
       const target = { x: p.x + pointer.dx, y: p.y + pointer.dy, theta: pointer.anchor.theta };
@@ -766,7 +788,25 @@
     if (pointer.type === "pan" || pointer.type === "measure") { pointer = null; return; }
     const next = { ...pose };
     pose = { ...pointer.anchor };
-    commit(next, pointer.type === "rotate" ? "向き変更" : "前後ドラッグ", pointer.type === "rotate" ? { moveLocked: false, snap: false, turn: pivotToggleEl.checked ? "one" : undefined } : { moveLocked: true, snap: true });
+    // onUp 関数内の commit 呼び出し部分を以下のように調整
+    const isRotate = pointer.type === "rotate";
+    const isBackward = !!pointer.isBackward;
+
+    commit(
+      next,
+      isRotate ? `${isBackward ? '後進' : ''}向き変更` : "前後ドラッグ",
+      isRotate ? {
+        moveLocked: false,
+        snap: false,
+        turn: pivotToggleEl.checked ? "one" : undefined,
+        back: isBackward
+      } : {
+        moveLocked: true,
+        snap: true
+      }
+    );
+
+    // ★ここに pointer = null; を追加してドラッグ状態を解除します
     pointer = null;
   }
 
@@ -1179,7 +1219,7 @@
     renderCourse(); renderGrid(); renderAll(); loadCsvAuto(); loadBackgroundAuto();
   })();
 
-  window.simDebug = { get pose() { return pose; }, get history() { return history; }, commit, undo, redo, wallContacts, clampToWalls, applyWallDon, wallDonDrive, driveToWall, resetHome, parseCsv, snapFree, buildCommands, zoomAt, fitView, rotatedPose, extentXF, extentXB, extentYU, extentYD, setPivotMode, renderHistoryPanel, odometry, wheelTravelCm, get pivotOn() { return !!(pivotToggleEl && pivotToggleEl.checked); }, get view() { return view; } };
+  window.simDebug = { get pose() { return pose; }, get history() { return history; }, executePivotTurn, commit, undo, redo, wallContacts, clampToWalls, applyWallDon, wallDonDrive, driveToWall, resetHome, parseCsv, snapFree, buildCommands, zoomAt, fitView, rotatedPose, extentXF, extentXB, extentYU, extentYD, setPivotMode, renderHistoryPanel, odometry, wheelTravelCm, get pivotOn() { return !!(pivotToggleEl && pivotToggleEl.checked); }, get view() { return view; } };
 })();
 
 // パネルのドラッグ移動処理
