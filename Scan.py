@@ -79,11 +79,11 @@ def _analyze_pdf(doc):
 
     # フィールド部分を切り抜き
     field_binary = binary[
-        offset_y : offset_y + field_h_px, offset_x : offset_x + field_w_px
+        offset_y: offset_y + field_h_px, offset_x: offset_x + field_w_px
     ]
     # デバッグ用に元画像のフィールド部分をカラーで保持
     field_img = img[
-        offset_y : offset_y + field_h_px, offset_x : offset_x + field_w_px
+        offset_y: offset_y + field_h_px, offset_x: offset_x + field_w_px
     ].copy()
 
     # シミュレーター用の背景画像(検出線を描画する前の状態)を保存。
@@ -128,7 +128,7 @@ def _analyze_pdf(doc):
 
     # 白チェック用のグレー画像(フィールド部分)。毎回切り出し直さず一度だけ作る
     gray_field = gray[
-        offset_y : offset_y + field_h_px, offset_x : offset_x + field_w_px
+        offset_y: offset_y + field_h_px, offset_x: offset_x + field_w_px
     ]
 
     def check_white_touch(y_start, y_end, x_start, x_end, is_horizontal):
@@ -170,7 +170,7 @@ def _analyze_pdf(doc):
                 new_x_start = x
                 count = 0
                 while new_x_start > 0 and count < limit_px:
-                    if np.any(field_binary[y : y + h, new_x_start - 1] == 255):
+                    if np.any(field_binary[y: y + h, new_x_start - 1] == 255):
                         new_x_start -= 1
                         count += 1
                     else:
@@ -181,7 +181,7 @@ def _analyze_pdf(doc):
                 while (
                     new_x_end < field_binary.shape[1] - 1 and count < limit_px
                 ):
-                    if np.any(field_binary[y : y + h, new_x_end] == 255):
+                    if np.any(field_binary[y: y + h, new_x_end] == 255):
                         new_x_end += 1
                         count += 1
                     else:
@@ -196,7 +196,7 @@ def _analyze_pdf(doc):
                 cut_px = int(10 * px_per_mm)
                 new_x_start += cut_px
                 new_x_end -= cut_px
-                
+
                 if new_x_start >= new_x_end:
                     continue
 
@@ -229,7 +229,7 @@ def _analyze_pdf(doc):
                 new_y_start = y
                 count = 0
                 while new_y_start > 0 and count < limit_px:
-                    if np.any(field_binary[new_y_start - 1, x : x + w] == 255):
+                    if np.any(field_binary[new_y_start - 1, x: x + w] == 255):
                         new_y_start -= 1
                         count += 1
                     else:
@@ -240,7 +240,7 @@ def _analyze_pdf(doc):
                 while (
                     new_y_end < field_binary.shape[0] - 1 and count < limit_px
                 ):
-                    if np.any(field_binary[new_y_end, x : x + w] == 255):
+                    if np.any(field_binary[new_y_end, x: x + w] == 255):
                         new_y_end += 1
                         count += 1
                     else:
@@ -257,7 +257,7 @@ def _analyze_pdf(doc):
                 cut_px = int(10 * px_per_mm)
                 new_y_start += cut_px
                 new_y_end -= cut_px
-                
+
                 if new_y_start >= new_y_end:
                     continue
 
@@ -325,17 +325,17 @@ if __name__ == "__main__":
         if not lines:
             print("黒線が1本も検出できませんでした。既存の lines.csv を壊さないよう更新を中止します(入力PDFや明るさを確認してください)。")
             sys.exit(2)
-        
+
         # コンソールに表示
         for i, line in enumerate(lines):
             print(f"線 {i+1}:")
             print(f"  向き: {'横線' if line['type'] == 'horizontal' else '縦線'}")
             print(f"  始点: ({line['start'][0]:.1f} mm, {line['start'][1]:.1f} mm)")
             print(f"  終点: ({line['end'][0]:.1f} mm, {line['end'][1]:.1f} mm)")
-            
+
         # CSVに出力
         save_to_csv(lines, csv_file)
-        
+
     except Exception as e:
         print(f"エラーが発生しました: {e}")
         sys.exit(1)  # CI等で失敗に気づけるよう終了コードを返す
