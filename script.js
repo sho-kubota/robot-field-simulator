@@ -1099,6 +1099,33 @@
     await loadPdfAuto();
   }
 
+  // ★ここに追加: config.jsonを非同期で読み込んで初期位置を更新する関数
+  async function loadConfigAuto() {
+    try {
+      const res = await fetch("config.json", { cache: "no-store" });
+      if (!res.ok) return;
+      const config = await res.json();
+      if (config && config.robot_init) {
+        // config.jsonの座標で初期位置(initPos)を上書き
+        if (Number.isFinite(config.robot_init.x)) initPos.x = config.robot_init.x;
+        if (Number.isFinite(config.robot_init.y)) initPos.y = config.robot_init.y;
+        if (Number.isFinite(config.robot_init.angle)) initPos.theta = config.robot_init.angle;
+
+        // 入力フォームの表示値も更新
+        if (initXInput) initXInput.value = initPos.x;
+        if (initYInput) initYInput.value = initPos.y;
+        if (initAngleInput) initAngleInput.value = initPos.theta;
+
+        // 前回の保存状態（LocalStorage）がない初回起動時は、ロボットを新初期位置へ配置
+        if (!readSavedState()) {
+          resetHome();
+        }
+      }
+    } catch (e) {
+      console.warn("config.json の読み込みをスキップしました:", e);
+    }
+  }
+
   bgToggleEl.addEventListener("change", () => {
     if (bgEl.style.display === "none" && bgUrl && bgToggleEl.checked) {
       bgEl.style.display = "";
@@ -1145,9 +1172,12 @@
     else if ((k === "z" && evt.shiftKey) || k === "y") { evt.preventDefault(); redo(); }
   });
 
-  loadInitPos();
-  applyView();
-  renderCourse(); renderGrid(); renderAll(); loadCsvAuto(); loadBackgroundAuto();
+  (async () => {
+    loadInitPos();
+    await loadConfigAuto(); // ★ config.json を読み込む
+    applyView();
+    renderCourse(); renderGrid(); renderAll(); loadCsvAuto(); loadBackgroundAuto();
+  })();
 
   window.simDebug = { get pose() { return pose; }, get history() { return history; }, commit, undo, redo, wallContacts, clampToWalls, applyWallDon, wallDonDrive, driveToWall, resetHome, parseCsv, snapFree, buildCommands, zoomAt, fitView, rotatedPose, extentXF, extentXB, extentYU, extentYD, setPivotMode, renderHistoryPanel, odometry, wheelTravelCm, get pivotOn() { return !!(pivotToggleEl && pivotToggleEl.checked); }, get view() { return view; } };
 })();

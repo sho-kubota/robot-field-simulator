@@ -3,6 +3,8 @@ import cv2
 import pymupdf  # PyMuPDF
 import numpy as np
 import csv  # CSV出力用に標準ライブラリをインポート
+import json
+import math
 
 
 def analyze_robot_field(pdf_path):
@@ -303,7 +305,7 @@ def _analyze_pdf(doc):
     else:
         print("debug.jpg を作成しました。")
 
-    return detected_lines
+    return detected_lines, start_areas
 
 
 def detect_start_area(field_img, offset_x, offset_y, px_per_mm):
@@ -365,12 +367,15 @@ def detect_start_area(field_img, offset_x, offset_y, px_per_mm):
                 mm_w = w / px_per_mm
                 mm_h = h / px_per_mm
 
+                # ★ 中央座標を計算して辞書に追加する
                 start_areas.append(
                     {
                         "x": mm_x,
                         "y": mm_y,
                         "w": mm_w,
                         "h": mm_h,
+                        "center_x": mm_x + (mm_w / 2.0),  # 追加
+                        "center_y": mm_y + (mm_h / 2.0),  # 追加
                     }
                 )
 
@@ -395,17 +400,65 @@ def save_to_csv(lines, csv_path):
     print(f"{csv_path} を作成しました。")
 
 
+def save_config_to_json(start_areas, json_path="config.json", angle=0.0):
+    """スタートエリア中央にロボットの幾何中心がくるよう、車軸位置を逆算して保存"""
+    if not start_areas:
+        print(
+            "スタートエリアが検出されなかったため、config.json の更新をスキップします。"
+        )
+        return
+
+    primary_start = start_areas[0]
+
+    # エリア幾何中心
+    center_x = primary_start.get(
+        "center_x", primary_start["x"] + primary_start["w"] / 2.0
+    )
+    center_y = primary_start.get(
+        "center_y", primary_start["y"] + primary_start["h"] / 2.0
+    )
+
+    # ロボット構造パラメータ（script.js の値に準拠）
+    robot_length = 243.0  # 全長
+    axle_from_rear = 100.0  # 後端から車軸までの距離
+
+    # 幾何中心から車軸（原点）までのオフセット量 (+21.5 mm)
+    center_to_axle_offset = (robot_length / 2.0) - axle_from_rear
+
+    # 初期角度(angle)に応じた車軸座標の逆算
+    angle_rad = math.radians(angle)
+    axle_x = center_x - (center_to_axle_offset * math.cos(angle_rad))
+    axle_y = center_y - (center_to_axle_offset * math.sin(angle_rad))
+
+    config_data = {
+        "robot_init": {
+            "x": round(axle_x, 1),
+            "y": round(axle_y, 1),
+            "angle": angle,
+        }
+    }
+
+    with open(json_path, mode="w", encoding="utf-8") as f:
+        json.dump(config_data, f, indent=2, ensure_ascii=False)
+    print(
+        f"{json_path} を作成しました。(補正後原点: x={round(axle_x, 1)}, y={round(axle_y, 1)})"
+    )
+
+
 if __name__ == "__main__":
     import os
     import sys
 
     pdf_file = "field.pdf"
     csv_file = "lines.csv"
+    json_file = "config.json"  # 追加
+
     if not os.path.exists(pdf_file):
         print(f"エラー: {pdf_file} が見つかりません。リポジトリ直下で実行してください。")
         sys.exit(1)
     try:
-        lines = analyze_robot_field(pdf_file)
+        # タプルで2つの戻り値を受け取る
+        lines, start_areas = analyze_robot_field(pdf_file)
         print(f"検出された黒線の数: {len(lines)}")
         if not lines:
             print("黒線が1本も検出できませんでした。既存の lines.csv を壊さないよう更新を中止します(入力PDFや明るさを確認してください)。")
@@ -420,6 +473,9 @@ if __name__ == "__main__":
 
         # CSVに出力
         save_to_csv(lines, csv_file)
+
+        # ★ JSONファイルに出力（save_to_csvの直後に追加）
+        save_config_to_json(start_areas, json_file)
 
     except Exception as e:
         print(f"エラーが発生しました: {e}")
